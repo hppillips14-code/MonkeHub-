@@ -1,246 +1,261 @@
-# MonkeHub-
-Following Script for Roblox
--- Monke Hub | Stable Async Pathfinding + Move Speed + Auto-Teleport
+--// SERVICES
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
 local PathfindingService = game:GetService("PathfindingService")
+local Workspace = game:GetService("Workspace")
+
 local LocalPlayer = Players.LocalPlayer
 
--- CONFIG
-local FOLLOW_DISTANCE = 6
-local GUI_KEY = Enum.KeyCode.K
+--// RAYFIELD
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
--- STATE
-local targetPlayer = nil
+--// WINDOW
+local Window = Rayfield:CreateWindow({
+	Name = "🐵 Monke Hub",
+	LoadingTitle = "Monke Hub",
+	LoadingSubtitle = "Advanced Follow System",
+	ConfigurationSaving = {
+		Enabled = true,
+		FolderName = "MonkeHub",
+		FileName = "Settings"
+	}
+})
+
+--// THEME TAB
+local ThemeTab = Window:CreateTab("🎨 Theme")
+ThemeTab:CreateDropdown({
+	Name = "Select Theme",
+	Options = {"Default","Ocean","Dark","Light","Serenity","Amber Glow"},
+	CurrentOption = "Default",
+	Callback = function(theme)
+		Rayfield:SetTheme(theme)
+	end
+})
+
+--// FOLLOW TAB
+local FollowTab = Window:CreateTab("🐾 Follow")
+
+--// STATE
+local targetName = ""
+local targetPlayer
 local following = false
-local character, hrp, humanoid
-local lastTargetPos
+local speedMult = 0.5
 
--- CHARACTER SETUP
-local function setupCharacter(char)
-    character = char
-    hrp = char:WaitForChild("HumanoidRootPart")
-    humanoid = char:WaitForChild("Humanoid")
-end
-if LocalPlayer.Character then setupCharacter(LocalPlayer.Character) end
-LocalPlayer.CharacterAdded:Connect(setupCharacter)
+--// CONFIG
+local FOLLOW_DISTANCE = 6
+local PREDICTION_TIME = 0.35
+local BLEND_ALPHA = 0.3
+local DIRECT_DISTANCE = 45
+local PATH_COOLDOWN = 0.8
 
--- GUI
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MonkeHubGui"
-ScreenGui.Parent = PlayerGui
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Enabled = false
+--// PATH ESP
+local SHOW_PATH_ESP = true
+local pathVisuals = {}
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.fromOffset(420,540)
-MainFrame.Position = UDim2.fromScale(0.5,0.5)
-MainFrame.AnchorPoint = Vector2.new(0.5,0.5)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0,14)
-
--- HEADER
-local Header = Instance.new("TextLabel")
-Header.Size = UDim2.new(1,0,0,55)
-Header.Position = UDim2.new(0,0,0,0)
-Header.BackgroundColor3 = Color3.fromRGB(45,45,45)
-Header.Text = "Monke Hub"
-Header.TextColor3 = Color3.fromRGB(255,255,255)
-Header.Font = Enum.Font.GothamBold
-Header.TextSize = 28
-Header.Parent = MainFrame
-Instance.new("UICorner", Header).CornerRadius = UDim.new(0,14)
-
--- PLAYER INPUT
-local NameBox = Instance.new("TextBox")
-NameBox.Size = UDim2.new(0.9,0,0,38)
-NameBox.Position = UDim2.new(0.05,0,0.12,0)
-NameBox.PlaceholderText = "Enter player name"
-NameBox.TextColor3 = Color3.fromRGB(255,255,255)
-NameBox.BackgroundColor3 = Color3.fromRGB(50,50,50)
-NameBox.Font = Enum.Font.Gotham
-NameBox.TextSize = 16
-NameBox.Parent = MainFrame
-Instance.new("UICorner", NameBox).CornerRadius = UDim.new(0,8)
-
--- BUTTONS
-local function makeButton(text,posY)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.9,0,0,42)
-    btn.Position = UDim2.new(0.05,0,posY,0)
-    btn.BackgroundColor3 = Color3.fromRGB(55,55,55)
-    btn.TextColor3 = Color3.fromRGB(255,255,255)
-    btn.Text = text
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 18
-    btn.Parent = MainFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,10)
-    return btn
+--// CHARACTER
+local function getChar()
+	local char = LocalPlayer.Character
+	if not char then return end
+	return char, char:FindFirstChild("HumanoidRootPart"), char:FindFirstChild("Humanoid")
 end
 
-local FollowButton = makeButton("FOLLOW",0.26)
-local StopButton = makeButton("STOP",0.37)
-local TeleportButton = makeButton("TELEPORT TO PLAYER",0.48)
-
--- SLIDERS
-local function createSlider(parent,posY,labelText,defaultValue,color)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0.9,0,0,35)
-    frame.Position = UDim2.new(0.05,0,posY,0)
-    frame.BackgroundColor3 = Color3.fromRGB(55,55,55)
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,8)
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0.5,0,1,0)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(255,255,255)
-    label.Font = Enum.Font.Gotham
-    label.TextSize = 14
-    label.Text = labelText .. math.floor(defaultValue*100) .. "%"
-    label.Parent = frame
-
-    local bar = Instance.new("Frame")
-    bar.Size = UDim2.new(defaultValue,0,1,0)
-    bar.BackgroundColor3 = color
-    bar.Parent = frame
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(0,8)
-
-    local handle = Instance.new("Frame")
-    handle.Size = UDim2.new(0,12,1,0)
-    handle.AnchorPoint = Vector2.new(1,0)
-    handle.Position = UDim2.new(1,0,0,0)
-    handle.BackgroundColor3 = Color3.fromRGB(255,255,255)
-    handle.Parent = bar
-    Instance.new("UICorner", handle).CornerRadius = UDim.new(0,6)
-
-    local dragging = false
-    local value = defaultValue
-
-    local function updateValue(mouseX)
-        local frameX = frame.AbsolutePosition.X
-        local frameW = frame.AbsoluteSize.X
-        value = math.clamp((mouseX-frameX)/frameW,0,1)
-        bar.Size = UDim2.new(value,0,1,0)
-        handle.Position = UDim2.new(1,0,0,0)
-        label.Text = labelText .. math.floor(value*100) .. "%"
-    end
-
-    handle.InputBegan:Connect(function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 then dragging=true end
-    end)
-    handle.InputEnded:Connect(function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
-    end)
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 then
-            updateValue(input.Position.X)
-            dragging=true
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType==Enum.UserInputType.MouseMovement then
-            updateValue(input.Position.X)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
-    end)
-
-    return function() return value end
+--// PLAYER FIND
+local function findPlayer(name)
+	for _,p in ipairs(Players:GetPlayers()) do
+		if p.Name:lower():sub(1,#name) == name:lower() then
+			return p
+		end
+	end
 end
 
-local getMoveSpeed = createSlider(MainFrame,0.75,"Move Speed: ",0.5,Color3.fromRGB(70,180,200))
-
--- FIND PLAYER
-local function getPlayerByName(name)
-    for _,p in pairs(Players:GetPlayers()) do
-        if p.Name:lower():sub(1,#name) == name:lower() then return p end
-    end
-    return nil
+--// VELOCITY PREDICTION
+local function predictedPos(hrp)
+	return hrp.Position + hrp.Velocity * PREDICTION_TIME
 end
 
--- FOLLOW LOGIC WITH AUTO-TELEPORT
-local function followPlayer()
-    spawn(function()
-        local path = nil
-        local currentWaypoint = 1
+--// OBSTACLE CHECK
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Blacklist
 
-        while following and targetPlayer and targetPlayer.Character and hrp and humanoid do
-            local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if not targetHRP then break end
-
-            local dist = (hrp.Position - targetHRP.Position).Magnitude
-            humanoid.WalkSpeed = 16 + 84*getMoveSpeed()
-
-            if dist > FOLLOW_DISTANCE then
-                local shouldRecompute = not path or (lastTargetPos and (targetHRP.Position - lastTargetPos).Magnitude > 5)
-                
-                if shouldRecompute then
-                    local newPath = PathfindingService:CreatePath({
-                        AgentRadius = 2,
-                        AgentHeight = 5,
-                        AgentCanJump = true,
-                        AgentJumpHeight = 10,
-                        AgentMaxSlope = 45,
-                    })
-                    newPath:ComputeAsync(hrp.Position, targetHRP.Position)
-
-                    if newPath.Status == Enum.PathStatus.Success then
-                        path = newPath:GetWaypoints()
-                        currentWaypoint = 1
-                        lastTargetPos = targetHRP.Position
-                    else
-                        hrp.CFrame = targetHRP.CFrame + Vector3.new(0,3,0)
-                        path = nil
-                        wait(0.5)
-                    end
-                end
-
-                if path then
-                    while currentWaypoint <= #path and following do
-                        local waypoint = path[currentWaypoint]
-                        humanoid:MoveTo(waypoint.Position)
-                        humanoid.MoveToFinished:Wait()
-                        currentWaypoint = currentWaypoint + 1
-                    end
-                end
-            else
-                wait(0.2)
-            end
-            wait(0.05)
-        end
-    end)
+local function canDirectMove(from, to, char)
+	rayParams.FilterDescendantsInstances = {char}
+	return not Workspace:Raycast(from, to - from, rayParams)
 end
 
--- BUTTON LOGIC
-FollowButton.MouseButton1Click:Connect(function()
-    targetPlayer = getPlayerByName(NameBox.Text)
-    if targetPlayer then
-        following = true
-        followPlayer()
-    end
-end)
+--// PATH ESP
+local function clearPathESP()
+	for _,v in ipairs(pathVisuals) do
+		if v and v.Parent then
+			v:Destroy()
+		end
+	end
+	table.clear(pathVisuals)
+end
 
-StopButton.MouseButton1Click:Connect(function() following=false end)
+local function drawPathESP(points)
+	clearPathESP()
+	if not SHOW_PATH_ESP then return end
 
-TeleportButton.MouseButton1Click:Connect(function()
-    if targetPlayer and targetPlayer.Character and hrp then
-        local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if targetHRP then
-            hrp.CFrame = targetHRP.CFrame + Vector3.new(0,3,0)
-        end
-    end
-end)
+	for i = 1, #points - 1 do
+		local a = points[i].Position
+		local b = points[i+1].Position
 
--- GUI TOGGLE
-UserInputService.InputBegan:Connect(function(input,gp)
-    if gp then return end
-    if input.KeyCode==GUI_KEY then
-        ScreenGui.Enabled = not ScreenGui.Enabled
-    end
-end)
+		local beam = Instance.new("Part")
+		beam.Anchored = true
+		beam.CanCollide = false
+		beam.Material = Enum.Material.Neon
+		beam.Color = Color3.fromRGB(0,170,255)
+		beam.Size = Vector3.new(0.25,0.25,(a-b).Magnitude)
+		beam.CFrame = CFrame.lookAt((a+b)/2, b)
+		beam.Parent = Workspace
+
+		table.insert(pathVisuals, beam)
+	end
+end
+
+--// TELEPORT
+local function teleportToTarget()
+	local char, hrp = getChar()
+	if not hrp or not targetPlayer then return end
+
+	local tHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if tHRP then
+		hrp.CFrame = tHRP.CFrame * CFrame.new(0,0,-3)
+	end
+end
+
+--// FOLLOW LOGIC
+local lastPath = 0
+
+local function startFollow()
+	if following then return end
+	following = true
+
+	task.spawn(function()
+		while following do
+			local char, hrp, hum = getChar()
+			if not char or not hrp or not hum then break end
+
+			targetPlayer = findPlayer(targetName)
+			if not targetPlayer or not targetPlayer.Character then break end
+
+			local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not targetHRP then break end
+
+			hum.WalkSpeed = 16 + 84 * speedMult
+			local goal = predictedPos(targetHRP)
+			local dist = (hrp.Position - goal).Magnitude
+
+			-- DIRECT MOVE
+			if dist <= DIRECT_DISTANCE and canDirectMove(hrp.Position, goal, char) then
+				hum:MoveTo(goal)
+				task.wait(0.12)
+				continue
+			end
+
+			-- PATHFINDING
+			if os.clock() - lastPath < PATH_COOLDOWN then
+				task.wait(0.1)
+				continue
+			end
+			lastPath = os.clock()
+
+			local path = PathfindingService:CreatePath({
+				AgentRadius = 2,
+				AgentHeight = 5,
+				AgentCanJump = true,
+				WaypointSpacing = 4
+			})
+
+			path:ComputeAsync(hrp.Position, goal)
+
+			if path.Status == Enum.PathStatus.Success then
+				local waypoints = path:GetWaypoints()
+				drawPathESP(waypoints)
+
+				for _,wp in ipairs(waypoints) do
+					if not following then break end
+
+					local blended = wp.Position:Lerp(goal, BLEND_ALPHA)
+					hum:MoveTo(blended)
+					hum.MoveToFinished:Wait()
+
+					if (hrp.Position - goal).Magnitude <= FOLLOW_DISTANCE then
+						break
+					end
+				end
+			else
+				Rayfield:Notify({
+					Title = "Monke Hub",
+					Content = "Path blocked — teleport recommended",
+					Duration = 2
+				})
+			end
+
+			task.wait(0.05)
+		end
+
+		following = false
+		clearPathESP()
+	end)
+end
+
+--// UI CONTROLS
+FollowTab:CreateInput({
+	Name = "Target Player",
+	PlaceholderText = "Username",
+	Callback = function(text)
+		targetName = text
+	end
+})
+
+FollowTab:CreateSlider({
+	Name = "Move Speed",
+	Range = {0,100},
+	CurrentValue = 50,
+	Increment = 1,
+	Callback = function(v)
+		speedMult = v / 100
+	end
+})
+
+FollowTab:CreateToggle({
+	Name = "Show Path ESP",
+	CurrentValue = true,
+	Callback = function(v)
+		SHOW_PATH_ESP = v
+		if not v then clearPathESP() end
+	end
+})
+
+FollowTab:CreateButton({
+	Name = "▶ Start Follow",
+	Callback = startFollow
+})
+
+FollowTab:CreateButton({
+	Name = "⏹ Stop Follow",
+	Callback = function()
+		following = false
+		clearPathESP()
+	end
+})
+
+FollowTab:CreateButton({
+	Name = "⚡ Teleport To Player",
+	Callback = teleportToTarget
+})
+
+FollowTab:CreateButton({
+	Name = "🛠 Load Infinite Yield",
+	Callback = function()
+		loadstring(game:HttpGet(
+			"https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"
+		))()
+	end
+})
+
+Rayfield:Notify({
+	Title = "Monke Hub Loaded",
+	Content = "Rayfield Edition Ready 🐵",
+	Duration = 4
+})
